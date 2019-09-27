@@ -1,0 +1,124 @@
+1、连接渠道和进件表
+CREATE TABLE testdb.user_borrow AS
+SELECT a.uid,
+       a.pchannel,
+       b.pid,
+       b.loan_amount,
+       b.createtime
+FROM
+  (SELECT *
+   FROM spore.spore_user_auth
+   WHERE appid = '5') AS a
+JOIN
+  (SELECT *
+   FROM hermes.hermes_borrow
+   WHERE is_cost=1 and status in (7,8,9)) AS b ON a.uid=b.uid;
+2、查询放款笔数
+SELECT count(DISTINCT concat(b.uid,b.pid))
+FROM
+  (SELECT *
+   FROM spore.spore_user_auth
+   WHERE appid = '5') AS a
+JOIN
+  (SELECT *
+   FROM hermes.hermes_borrow
+   WHERE is_cost='1' and status in (7,8,9) and to_date(loan_date)='2019-02-26') AS b ON a.uid=b.uid;
+3、查询进件数
+select count(DISTINCT concat(hermes_borrow.uid,hermes_borrow.pid)) from hermes.hermes_borrow 
+where is_cost='1' and to_date(createtime)='2019-02-26'
+4、创建产品收入表
+create table testdb.pid_income_20190305 as 
+select bi_api_view_click.pid,sum(bi_api_view_click.income) from new_bi.bi_api_view_click
+where to_date(bi_api_view_click.data_day)='2019-03-05'
+group by bi_api_view_click.pid
+5、查询渠道花费
+select pchannel,name,cost from ibu_algo_data.rongshu_market_chengben 
+where to_date(thedate)='2019-03-05'
+6、使用当前日期
+select date_sub(from_unixtime(unix_timestamp(),'yyyy-MM-dd'), 7) from new_bi.bi_api_view_click
+7、埋点日志
+set mapred.job.queue.name=huegroup;
+select * from orion_part.orion_stat_log_part
+where dt>='20190325' and to_date(createtime)='2019-03-26' 
+and appid=5 and pageid = 10137 and actionid = '10166'
+and get_json_object(description, '$.channel') = 'vivo'
+8、向hive上传文件
+hadoop fs -ls /user/hive/warehouse/testdb.db/channel_roi
+hadoop fs -rm /user/hive/warehouse/testdb.db/channel_roi/test.csv
+hadoop fs -put test.csv /user/hive/warehouse/testdb.db/channel_roi
+9、创建表
+create table testdb.channel_roi 
+(time string,channel string,income_new  double,income_old double,cost double,roi_new double,roi_old double)
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY ','
+STORED AS TEXTFILE;
+加分区
+create external table testdb.push_base(
+push_uid int COMMENT 'push用户id',
+os string COMMENT '系统设备',
+push_time string COMMENT 'push时间(时分秒)',
+push_dt string COMMENT 'push时间',
+push_content string COMMENT 'push内容',
+push_policy string COMMENT 'push计划',
+push_send_status int COMMENT 'push发送状态',
+new_old_user_status int COMMENT '新老客',
+success_uid int COMMENT 'push送达用户id',
+success_pid int COMMENT 'push送达pid',
+open_uid int COMMENT '打开push用户id',
+open_pid int COMMENT '打开push产品id',
+click_uid int COMMENT '点击申请push用户id',
+click_pid int COMMENT '点击申请push产品id'
+)
+PARTITIONED BY(dt STRING)
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY '\t'
+STORED AS TEXTFILE;
+CREATE TABLE `bi_api_base_daily` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `channel_type` varchar(20) DEFAULT NULL COMMENT '渠道类型',
+  `channel_name` varchar(20) DEFAULT NULL COMMENT '渠道名称',
+  `channel_code` varchar(20) DEFAULT NULL COMMENT '渠道代码',
+  `pid` int(11) DEFAULT '0' COMMENT '产品id',
+  `pname` varchar(50) DEFAULT NULL COMMENT '产品名称',
+  `detail_uv` int(11) DEFAULT '0' COMMENT 'api详情页展示UV',
+  `entry_pen_number` int(11) DEFAULT '0' COMMENT '进件笔数',
+  `loan_income` decimal(10,2) DEFAULT '0' COMMENT '进件申请金额',
+  `impact_storehouse_number` int(11) DEFAULT '0' COMMENT '撞库人数',
+  `crash_through_number` int(11) DEFAULT '0' COMMENT '撞库通过人数',
+  `card_number` int(11) DEFAULT '0' COMMENT '进件绑卡人数',
+  `thedate` varchar(25) DEFAULT NULL COMMENT '日期',
+  PRIMARY KEY (`id`),
+  KEY `bi_api_base_daily_thedate_index` (`thedate`)
+) ENGINE=InnoDB AUTO_INCREMENT=1 DEFAULT CHARSET=utf8 COMMENT='分渠道的API基础数据'
+10、查看建表信息
+show create table testdb.channel_roi
+查看分区字段
+show partitions dw_ibu_data.dim_user_id
+11、时间对应查表
+select t1.d, count(distinct t1.uid), count(distinct t2.uid), round(count(distinct t2.uid) / count(distinct t1.uid) , 3)
+from
+(select uid,  to_date(createtime) as d
+from dw_ibu_data.dim_user_register
+where appid=5 and to_date(createtime)>='2019-05-01' and to_date(createtime)<='2019-05-24') as t1
+left join
+(select uid,to_date(createtime) as d
+from dw_ibu_data.fact_brlabeloriginal_partitions
+where get_json_object(value,'$.als_m3_id_nbank_allnum') is not null and  to_date(createtime)>='2019-05-01' and to_date(createtime)<='2019-05-24') as t2
+on t1.uid=t2.uid and t1.d = t2.d
+group by t1.d
+12、hive执行sql时带字段名保存在文件中
+set hive.cli.print.header=true;
+set hive.resultset.use.unique.column.names=false;
+select * from *
+13、dt说明
+select count(distinct uid)
+from orion_part.orion_stat_log_part 
+where dt > '20190429' and to_date(createtime) = '2019-04-29' and dt<='20190430' and appid = 5 
+and pageid = 10051 and actionid=0
+有一部分4月29号的数据存储在4月30号分区中，说明dt延迟半个小时，前一天半个小时数据存储在后一天的分区中
+14、加入队列中
+set mapred.job.queue.name=huegroup;
+15、查询hive插入记录
+hadoop fs -ls /user/hive/warehouse/ibu_data_tech.db/user_profile
+16、hive -e 和 hive -f 的区别
+hive -f 后面指定的是一个.sql文件，然后文件里面直接写sql，就可以运行hive的sql，hive -e 后面是直接用双引号拼接hivesql字符串
